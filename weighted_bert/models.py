@@ -79,7 +79,6 @@ class Embedder:
         )
 
         self.embedding_model = None
-
         self._load_model()
 
     def _load_model(self):
@@ -96,8 +95,8 @@ class Embedder:
 
 
 class ClusteringModel:
-    def __init__(self, model: str) -> None:
-        self.model = model
+    def __init__(self) -> None:
+        raise NotImplementedError()
 
 
 class WeightedEmbeddingClusterer:
@@ -109,11 +108,7 @@ class WeightedEmbeddingClusterer:
         weight_per_token: float = 1,
         min_weight: float = 1,
     ) -> None:
-        self.weighting_model_name_or_path = weighting_model_name_or_path
-        self.embedding_model_name_or_path = embedding_model_name_or_path
-        self.clustering_algorithm = clustering_algorithm
-        self.weight_per_token = weight_per_token
-        self.min_weight = min_weight
+        raise NotImplementedError()
 
 
 if __name__ == "__main__":
