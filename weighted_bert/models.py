@@ -94,6 +94,28 @@ class Embedder:
         else:
             raise NotImplementedError()
 
+
+class ClusteringModel:
+    def __init__(self, model: str) -> None:
+        self.model = model
+
+
+class WeightedEmbeddingClusterer:
+    def __init__(
+        self,
+        weighting_model_name_or_path: str = "savasy/bert-base-turkish-ner-cased",
+        embedding_model_name_or_path: str = "dbmdz/bert-base-turkish-cased",
+        clustering_algorithm: str = "kmeans",
+        weight_per_token: float = 1,
+        min_weight: float = 1,
+    ) -> None:
+        self.weighting_model_name_or_path = weighting_model_name_or_path
+        self.embedding_model_name_or_path = embedding_model_name_or_path
+        self.clustering_algorithm = clustering_algorithm
+        self.weight_per_token = weight_per_token
+        self.min_weight = min_weight
+
+
 if __name__ == "__main__":
     weighting_model = "savasy/bert-base-turkish-ner-cased"
     embedding_model = "sentence-transformers/distiluse-base-multilingual-cased-v1"
