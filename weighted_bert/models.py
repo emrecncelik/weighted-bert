@@ -63,54 +63,6 @@ class Weighter:
         return document_embedding
 
 
-class Embedder:
-    def __init__(
-        self,
-        model_name_or_path: str,
-        embedding_layer: Union[int, List[int]] = 0,
-        sentence_transformer: bool = True,
-    ) -> None:
-        self.model_name_or_path = model_name_or_path
-        self.embedding_layer = embedding_layer
-        self.sentence_transformer = (
-            True
-            if "sentence-transformer" in self.model_name_or_path
-            else sentence_transformer
-        )
-
-        self.embedding_model = None
-        self._load_model()
-
-    def _load_model(self):
-        if self.sentence_transformer:
-            self.embedding_model = SentenceTransformer(self.model_name_or_path)
-        else:
-            raise NotImplementedError()
-
-    def get_sentence_embeddings(self, texts: List[str]):
-        if self.sentence_transformer:
-            return self.embedding_model.encode(texts)
-        else:
-            raise NotImplementedError()
-
-
-class ClusteringModel:
-    def __init__(self) -> None:
-        raise NotImplementedError()
-
-
-class WeightedEmbeddingClusterer:
-    def __init__(
-        self,
-        weighting_model_name_or_path: str = "savasy/bert-base-turkish-ner-cased",
-        embedding_model_name_or_path: str = "dbmdz/bert-base-turkish-cased",
-        clustering_algorithm: str = "kmeans",
-        weight_per_token: float = 1,
-        min_weight: float = 1,
-    ) -> None:
-        raise NotImplementedError()
-
-
 if __name__ == "__main__":
     weighting_model = "savasy/bert-base-turkish-ner-cased"
     embedding_model = "sentence-transformers/distiluse-base-multilingual-cased-v1"
