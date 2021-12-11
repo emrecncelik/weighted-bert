@@ -1,24 +1,25 @@
+import logging
 import numpy as np
-from typing import List, Union
-from sentence_transformers import SentenceTransformer
+from typing import List
+from scipy.sparse.linalg import svds
 from transformers import pipeline, AutoModelForTokenClassification, AutoTokenizer
 
+logger = logging.getLogger(__name__)
 
-class Weighter:
+
+class WeighterBase:
     """
     Implementation of Weighted Average scheme proposed in,
     Li, Y., Cai, J., & Wang, J. (2020, June).
     A Text Document Clustering Method Based on Weighted BERT Model.
     https://ieeexplore.ieee.org/document/9085059
 
-    Second weighting sceme (Weighted Removal) will be added in the future.
     """
 
     def __init__(
         self,
-        model_name_or_path: str,
-        weight_per_entity: float = 1,
-        min_weight: float = 1,
+        weighting_model_name: str,
+        entity_types: List[str] = None,
     ) -> None:
         """
         Document embedding model that weights sentences in the document
@@ -29,53 +30,192 @@ class Weighter:
                 from Hugging Face model hub, or local path to model
             weight_per_entity (float, optional): Weight of each weight token (eg. entity)
                 found in a sentence. Defaults to 1.
-            min_weight (float, optional): Mininum weight of sentences in case some sentences
-                have no weight tokens. Also added to sentences that contain weight tokens. Defaults to 1.
         """
-        self.model_name_or_path = model_name_or_path
-        self.weight_per_entity = weight_per_entity
-        self.min_weight = min_weight
+        self.weighting_model_name = weighting_model_name
+        self.entity_types = entity_types
 
+        self.embeddings_ = None
+        self.entity_counts_ = None
         self._load_model()
 
     def _load_model(self):
-        model = AutoModelForTokenClassification.from_pretrained(self.model_name_or_path)
-        tokenizer = AutoTokenizer.from_pretrained(self.model_name_or_path)
+        logger.info("================ Loading weighting model ================")
+        logger.info(f"\t{self.weighting_model_name}")
+        model = AutoModelForTokenClassification.from_pretrained(
+            self.weighting_model_name
+        )
+        tokenizer = AutoTokenizer.from_pretrained(self.weighting_model_name)
         self.weighting_model = pipeline(
             "ner", model=model, tokenizer=tokenizer, grouped_entities=True
         )
 
-    def _get_sentence_weight(self, entity_count: int):
+    def _get_entity_count_by_type(self, document: List[str]) -> List[int]:
+        if not self.entity_types:
+            sentence_entities = self.weighting_model(document)
+            entity_counts = [len(entity_list) for entity_list in sentence_entities]
+            return entity_counts
+        else:
+            raise NotImplementedError
+
+
+class WeightedAverage(WeighterBase):
+    """
+    Implementation of Weighted Average scheme proposed in,
+    Li, Y., Cai, J., & Wang, J. (2020, June).
+    A Text Document Clustering Method Based on Weighted BERT Model.
+    https://ieeexplore.ieee.org/document/9085059
+
+    """
+
+    def __init__(
+        self,
+        weighting_model_name: str,
+        entity_types: List[str] = None,
+        weight_per_entity: int = 1,
+        min_weight: int = 1,
+    ) -> None:
+        """Weighted average model that can be used to
+        calculate entity weighted document embeddings.
+
+        Args:
+            weighting_model_name (str): Hugging Face checkpoint of a NER model
+            entity_types (List[str], optional): Entity types to include into weighting.
+                Defaults to None which uses all types.
+            weight_per_entity (int, optional): Multiplier for each entity in the sentence,
+                see _calculate_sentence_weight method. Defaults to 1.
+            min_weight (int, optional): Minimum weight of a sentence. Defaults to 1.
+        """
+        super().__init__(
+            weighting_model_name,
+            entity_types=entity_types,
+        )
+        self.weight_per_entity = weight_per_entity
+        self.min_weight = min_weight
+
+    def get_document_embedding(
+        self, document: List[str], sentence_embeddings: np.ndarray
+    ):
+        entity_counts = self._get_entity_count_by_type(document)
+        weights = [self._calculate_sentence_weight(count) for count in entity_counts]
+        document_embedding = self._calculate_weighted_embedding(
+            weights, sentence_embeddings
+        )
+        return document_embedding
+
+    def _calculate_sentence_weight(self, entity_count: int):
         # Formula (1) from the paper
         return entity_count * self.weight_per_entity + self.min_weight
 
-    def _get_weighted_document(self, weights: List[int], embeddings: np.ndarray):
+    def _calculate_weighted_embedding(
+        self, weights: List[int], sentence_embeddings: np.ndarray
+    ):
         # Formula (2) from the paper
         weights = np.array(weights, ndmin=2).T
-        return np.sum(embeddings * weights, axis=0) / np.sum(weights)
+        return np.sum(sentence_embeddings * weights, axis=0) / np.sum(weights)
 
-    def get_document_embedding(self, texts: List[str], embeddings: np.ndarray):
-        entities = self.weighting_model(texts)
-        weights = [
-            self._get_sentence_weight(len(entity_list)) for entity_list in entities
+
+class WeightedRemoval(WeighterBase):
+    """
+    Implementation of Weighted Removal scheme proposed in,
+    Li, Y., Cai, J., & Wang, J. (2020, June).
+    A Text Document Clustering Method Based on Weighted BERT Model.
+    https://ieeexplore.ieee.org/document/9085059
+    """
+
+    def __init__(
+        self,
+        weighting_model_name: str,
+        entity_types: List[str] = None,
+        a: int = 10,
+    ) -> None:
+        """Weighted removal model # TODO Add explanation
+
+        Args:
+            weighting_model_name (str): Hugging Face checkpoint of a NER model
+            entity_types (List[str], optional):  Entity types to include into weighting.
+                Defaults to None which uses all types.
+            a (int, optional): Parameter proportional to p(s) that is used to ,
+                see _calculate_sentence_weight method. Defaults to 10.
+        """
+        super().__init__(weighting_model_name, entity_types=entity_types)
+        self.a = a  # TODO Calculate "a" considering max(p(s))?
+        self.collection_entity_counts_: List[List[int]] = None
+        self.total_entity_count_: int = None
+        self.trained: bool = False
+
+    def get_document_embeddings(
+        self, documents: List[List[str]], collection_sentence_embeddings: np.ndarray
+    ):
+        logger.info("================ Detecting entities ================")
+        self._calculate_collection_entity_counts(documents)
+
+        logger.info(
+            "================ Calculating initial document embeddings ================"
+        )
+
+        initial_document_embeddings = []
+        for i in range(len(documents)):
+            # Calculate sentence weight for each sentence in document
+            sentence_weights = [
+                self._calculate_sentence_weight(entity_count)
+                for entity_count in self.collection_entity_counts_[i]
+            ]
+            # Calculate initial document embedding according to sentence weights
+            initial_document_embedding = self._calculate_initial_document_embedding(
+                collection_sentence_embeddings[i], sentence_weights
+            )
+            initial_document_embeddings.append(initial_document_embedding)
+        initial_document_embeddings = np.array(initial_document_embeddings)
+
+        logger.info("================ Correcting document embeddings ================")
+        logger.info("\tCalculating first singular vector...")
+        # Perform SVD to calculate "first singular vector" mentioned in the paper
+        self._calculate_singular_vector(initial_document_embeddings)
+
+        # Apply removal and get final embeddings
+        logger.info("\tCalculating corrected embeddings...")
+        corrected_embeddings = np.array(
+            [
+                self._calculate_corrected_document_embedding(embed)
+                for embed in initial_document_embeddings
+            ]
+        )
+        return corrected_embeddings
+
+    def _calculate_sentence_weight(self, entity_count: int):
+        # Formula (3) and (4) from the paper
+        ps = entity_count / self.total_entity_count_  # (4)
+        return self.a / (self.a - ps)  # (3)
+
+    def _calculate_initial_document_embedding(
+        self, document_sentence_embeddings: np.ndarray, sentence_weights: List[float]
+    ):
+        # Formula (6) from the paper
+        weighted_sentence_embeddings = (
+            document_sentence_embeddings * np.array(sentence_weights, ndmin=2).T
+        )
+        initial_document_embedding = (
+            sum(weighted_sentence_embeddings) / weighted_sentence_embeddings.shape[0]
+        )
+        return initial_document_embedding
+
+    def _calculate_corrected_document_embedding(
+        self, initial_document_embedding: np.ndarray
+    ):
+        # Formula (7) from the paper
+        corrected_embedding = (
+            initial_document_embedding - self.u @ self.u.T @ initial_document_embedding
+        )
+        return corrected_embedding
+
+    def _calculate_singular_vector(self, initial_document_embeddings: np.ndarray):
+        u, _, _ = svds(initial_document_embeddings.T, 1)
+        self.u = u
+
+    def _calculate_collection_entity_counts(self, documents: List[str]):
+        self.collection_entity_counts_ = [
+            self._get_entity_count_by_type(doc) for doc in documents
         ]
-        document_embedding = self._get_weighted_document(weights, embeddings)
-        return document_embedding
-
-
-if __name__ == "__main__":
-    weighting_model = "savasy/bert-base-turkish-ner-cased"
-    embedding_model = "sentence-transformers/distiluse-base-multilingual-cased-v1"
-
-    texts = [
-        "Tesla'nın otomobilleri insan hayatlarını riske atıyor olabilir.",
-        "Türkiye ve Kore arasında gerçekleşen voleybol müsabakasını Türkiye Milli Takımı kazandı.",
-        "Mustafa Kemal Atatürk 19 Mayıs 1919'da Samsun'a ayak bastı.",
-        "Bu bir metin.",
-    ]
-
-    wm = Weighter(model_name_or_path=weighting_model)
-    em = Embedder(model_name_or_path=embedding_model)
-
-    embeddings = em.get_sentence_embeddings(texts)
-    weighted_doc = wm.get_document_embedding(texts, embeddings)
+        self.total_entity_count_ = sum(
+            [sum(sentence_counts) for sentence_counts in self.collection_entity_counts_]
+        )
