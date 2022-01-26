@@ -1,10 +1,16 @@
 import logging
 import numpy as np
-from typing import List
+from typing import Callable, List
 from scipy.sparse.linalg import svds
 from transformers import pipeline, AutoModelForTokenClassification, AutoTokenizer
 
 logger = logging.getLogger(__name__)
+
+
+class EntityModelNotProvided(Exception):
+    """Raised when an entity model (rule based function or HF checkpoint) is not provided to the Weighter classes"""
+
+    pass
 
 
 class WeighterBase:
@@ -18,7 +24,8 @@ class WeighterBase:
 
     def __init__(
         self,
-        weighting_model_name: str,
+        weighting_model_name: str = None,
+        entity_detector: Callable = None,
         entity_types: List[str] = None,
     ) -> None:
         """
@@ -31,12 +38,24 @@ class WeighterBase:
             weight_per_entity (float, optional): Weight of each weight token (eg. entity)
                 found in a sentence. Defaults to 1.
         """
+        if weighting_model_name is None and entity_detector is None:
+            raise EntityModelNotProvided(
+                "Provide a weighting_model_name (hf checkpoint) or an entity_detector (custom function) while initializing"
+            )
+
         self.weighting_model_name = weighting_model_name
+        self.entity_detector = entity_detector
         self.entity_types = entity_types
 
         self.embeddings_ = None
         self.entity_counts_ = None
-        self._load_model()
+
+        if entity_detector is None:
+            self._load_model()
+        else:
+            logger.info(
+                "Entity detector function you have provided is being used, not initializing HuggingFace model."
+            )
 
     def _load_model(self):
         logger.info("================ Loading weighting model ================")
@@ -51,8 +70,14 @@ class WeighterBase:
 
     def _get_entity_count_by_type(self, document: List[str]) -> List[int]:
         if not self.entity_types:
-            sentence_entities = self.weighting_model(document)
-            entity_counts = [len(entity_list) for entity_list in sentence_entities]
+            if self.entity_detector is not None:
+                entity_counts = [
+                    len(entity_list) for entity_list in self.entity_detector(document)
+                ]
+            else:
+                sentence_entities = self.weighting_model(document)
+                entity_counts = [len(entity_list) for entity_list in sentence_entities]
+            logger.debug(f"Entity count list for doc: {entity_counts}")
             return entity_counts
         else:
             raise NotImplementedError
@@ -69,7 +94,8 @@ class WeightedAverage(WeighterBase):
 
     def __init__(
         self,
-        weighting_model_name: str,
+        weighting_model_name: str = None,
+        entity_detector: Callable = None,
         entity_types: List[str] = None,
         weight_per_entity: int = 1,
         min_weight: int = 1,
@@ -86,14 +112,17 @@ class WeightedAverage(WeighterBase):
             min_weight (int, optional): Minimum weight of a sentence. Defaults to 1.
         """
         super().__init__(
-            weighting_model_name,
+            weighting_model_name=weighting_model_name,
+            entity_detector=entity_detector,
             entity_types=entity_types,
         )
         self.weight_per_entity = weight_per_entity
         self.min_weight = min_weight
 
     def get_document_embedding(
-        self, document: List[str], sentence_embeddings: np.ndarray
+        self,
+        document: List[str],
+        sentence_embeddings: np.ndarray,
     ):
         entity_counts = self._get_entity_count_by_type(document)
         weights = [self._calculate_sentence_weight(count) for count in entity_counts]
@@ -124,7 +153,8 @@ class WeightedRemoval(WeighterBase):
 
     def __init__(
         self,
-        weighting_model_name: str,
+        weighting_model_name: str = None,
+        entity_detector: Callable = None,
         entity_types: List[str] = None,
         a: int = 10,
     ) -> None:
@@ -137,14 +167,21 @@ class WeightedRemoval(WeighterBase):
             a (int, optional): Parameter proportional to p(s) that is used to ,
                 see _calculate_sentence_weight method. Defaults to 10.
         """
-        super().__init__(weighting_model_name, entity_types=entity_types)
+        super().__init__(
+            weighting_model_name=weighting_model_name,
+            entity_detector=entity_detector,
+            entity_types=entity_types,
+        )
         self.a = a  # TODO Calculate "a" considering max(p(s))?
         self.collection_entity_counts_: List[List[int]] = None
         self.total_entity_count_: int = None
         self.trained: bool = False
 
     def get_document_embeddings(
-        self, documents: List[List[str]], collection_sentence_embeddings: np.ndarray
+        self,
+        documents: List[List[str]],
+        collection_sentence_embeddings: np.ndarray,
+        entity_detector: Callable = None,
     ):
         logger.info("================ Detecting entities ================")
         self._calculate_collection_entity_counts(documents)
