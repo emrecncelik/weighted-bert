@@ -27,6 +27,7 @@ class WeighterBase:
         weighting_model_name: str = None,
         entity_detector: Callable = None,
         entity_types: List[str] = None,
+        entity_detector_kwargs: dict = {},
     ) -> None:
         """
         Document embedding model that weights sentences in the document
@@ -46,6 +47,7 @@ class WeighterBase:
         self.weighting_model_name = weighting_model_name
         self.entity_detector = entity_detector
         self.entity_types = entity_types
+        self.entity_detector_kwargs = entity_detector_kwargs
 
         self.embeddings_ = None
         self.entity_counts_ = None
@@ -72,7 +74,10 @@ class WeighterBase:
         if not self.entity_types:
             if self.entity_detector is not None:
                 entity_counts = [
-                    len(entity_list) for entity_list in self.entity_detector(document)
+                    len(entity_list)
+                    for entity_list in self.entity_detector(
+                        document, **self.entity_detector_kwargs
+                    )
                 ]
             else:
                 sentence_entities = self.weighting_model(document)
@@ -99,6 +104,7 @@ class WeightedAverage(WeighterBase):
         entity_types: List[str] = None,
         weight_per_entity: int = 1,
         min_weight: int = 1,
+        entity_detector_kwargs: dict = {},
     ) -> None:
         """Weighted average model that can be used to
         calculate entity weighted document embeddings.
@@ -115,6 +121,7 @@ class WeightedAverage(WeighterBase):
             weighting_model_name=weighting_model_name,
             entity_detector=entity_detector,
             entity_types=entity_types,
+            entity_detector_kwargs=entity_detector_kwargs,
         )
         self.weight_per_entity = weight_per_entity
         self.min_weight = min_weight
@@ -157,6 +164,7 @@ class WeightedRemoval(WeighterBase):
         entity_detector: Callable = None,
         entity_types: List[str] = None,
         a: int = 10,
+        entity_detector_kwargs: dict = {},
     ) -> None:
         """Weighted removal model # TODO Add explanation
 
@@ -171,6 +179,7 @@ class WeightedRemoval(WeighterBase):
             weighting_model_name=weighting_model_name,
             entity_detector=entity_detector,
             entity_types=entity_types,
+            entity_detector_kwargs=entity_detector_kwargs,
         )
         self.a = a  # TODO Calculate "a" considering max(p(s))?
         self.collection_entity_counts_: List[List[int]] = None
