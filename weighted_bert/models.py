@@ -190,7 +190,6 @@ class WeightedRemoval(WeighterBase):
         self,
         documents: List[List[str]],
         collection_sentence_embeddings: np.ndarray,
-        entity_detector: Callable = None,
     ):
         logger.info("================ Detecting entities ================")
         self._calculate_collection_entity_counts(documents)
