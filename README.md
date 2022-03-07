@@ -1,7 +1,6 @@
 # Weighted BERT
 
-Nonofficial implementation of the paper [A Text Document Clustering Method Based on Weighted BERT Model](https://ieeexplore.ieee.org/document/9085059).
-
+Nonofficial implementation of the paper [A Text Document Clustering Method Based on Weighted BERT Model](https://ieeexplore.ieee.org/document/9085059). This tool is **not** tested with the data sets used by the authors.
 ## Installation
 ```bash
 pip install git+https://github.com/emrecncelik/weighted-bert.git
