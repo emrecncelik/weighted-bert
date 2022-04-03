@@ -1,8 +1,13 @@
+from __future__ import annotations
+
 import logging
 import numpy as np
-from typing import Callable, List
+from typing import Callable
 from scipy.sparse.linalg import svds
 from transformers import pipeline, AutoModelForTokenClassification, AutoTokenizer
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.utils.validation import check_is_fitted
+from weighted_bert.data import InputExample
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +31,7 @@ class WeighterBase:
         self,
         weighting_model_name: str = None,
         entity_detector: Callable = None,
-        entity_types: List[str] = None,
+        entity_types: list[str] = None,
         entity_detector_kwargs: dict = {},
     ) -> None:
         """
@@ -49,9 +54,6 @@ class WeighterBase:
         self.entity_types = entity_types
         self.entity_detector_kwargs = entity_detector_kwargs
 
-        self.embeddings_ = None
-        self.entity_counts_ = None
-
         if entity_detector is None:
             self._load_model()
         else:
@@ -70,7 +72,7 @@ class WeighterBase:
             "ner", model=model, tokenizer=tokenizer, grouped_entities=True
         )
 
-    def _get_entity_count_by_type(self, document: List[str]) -> List[int]:
+    def _get_entity_count_by_type(self, document: list[str]) -> list[int]:
         if not self.entity_types:
             if self.entity_detector is not None:
                 entity_counts = [
@@ -88,7 +90,7 @@ class WeighterBase:
             raise NotImplementedError
 
 
-class WeightedAverage(WeighterBase):
+class WeightedAverage(WeighterBase, BaseEstimator, TransformerMixin):
     """
     Implementation of Weighted Average scheme proposed in,
     Li, Y., Cai, J., & Wang, J. (2020, June).
@@ -101,7 +103,7 @@ class WeightedAverage(WeighterBase):
         self,
         weighting_model_name: str = None,
         entity_detector: Callable = None,
-        entity_types: List[str] = None,
+        entity_types: list[str] = None,
         weight_per_entity: int = 1,
         min_weight: int = 1,
         entity_detector_kwargs: dict = {},
@@ -126,11 +128,31 @@ class WeightedAverage(WeighterBase):
         self.weight_per_entity = weight_per_entity
         self.min_weight = min_weight
 
-    def get_document_embedding(
+    def fit(self, X: list[InputExample], y=None) -> WeightedAverage:
+        self.embeddings_ = None
+        return self
+
+    def transform(self, X: list[InputExample]) -> list[np.ndarray]:
+        check_is_fitted(self)
+
+        embeddings = np.array(
+            [
+                self._get_document_embedding(
+                    example.document, example.sentence_embeddings
+                )
+                for example in X
+            ]
+        )
+        if self.embeddings_ is None:
+            self.embeddings_ = embeddings
+
+        return embeddings
+
+    def _get_document_embedding(
         self,
-        document: List[str],
+        document: list[str],
         sentence_embeddings: np.ndarray,
-    ):
+    ) -> np.ndarray:
         entity_counts = self._get_entity_count_by_type(document)
         weights = [self._calculate_sentence_weight(count) for count in entity_counts]
         document_embedding = self._calculate_weighted_embedding(
@@ -138,19 +160,19 @@ class WeightedAverage(WeighterBase):
         )
         return document_embedding
 
-    def _calculate_sentence_weight(self, entity_count: int):
+    def _calculate_sentence_weight(self, entity_count: int) -> int:
         # Formula (1) from the paper
         return entity_count * self.weight_per_entity + self.min_weight
 
     def _calculate_weighted_embedding(
-        self, weights: List[int], sentence_embeddings: np.ndarray
-    ):
+        self, weights: list[int], sentence_embeddings: np.ndarray
+    ) -> float:
         # Formula (2) from the paper
         weights = np.array(weights, ndmin=2).T
         return np.sum(sentence_embeddings * weights, axis=0) / np.sum(weights)
 
 
-class WeightedRemoval(WeighterBase):
+class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
     """
     Implementation of Weighted Removal scheme proposed in,
     Li, Y., Cai, J., & Wang, J. (2020, June).
@@ -162,7 +184,7 @@ class WeightedRemoval(WeighterBase):
         self,
         weighting_model_name: str = None,
         entity_detector: Callable = None,
-        entity_types: List[str] = None,
+        entity_types: list[str] = None,
         a: int = 10,
         entity_detector_kwargs: dict = {},
     ) -> None:
@@ -182,22 +204,74 @@ class WeightedRemoval(WeighterBase):
             entity_detector_kwargs=entity_detector_kwargs,
         )
         self.a = a  # TODO Calculate "a" considering max(p(s))?
-        self.collection_entity_counts_: List[List[int]] = None
-        self.total_entity_count_: int = None
-        self.trained: bool = False
 
-    def get_document_embeddings(
-        self,
-        documents: List[List[str]],
-        collection_sentence_embeddings: np.ndarray,
-    ):
+    def fit(self, X: list[InputExample], y=None):
         logger.info("================ Detecting entities ================")
-        self._calculate_collection_entity_counts(documents)
+        documents = [example.document for example in X]
 
+        self._calculate_collection_entity_counts(documents)
         logger.info(
             "================ Calculating initial document embeddings ================"
         )
+        collection_sentence_embeddings = [example.sentence_embeddings for example in X]
+        initial_document_embeddings = self._calculate_initial_document_embeddings(
+            documents, collection_sentence_embeddings
+        )
+        logger.info(
+            " ================ Calculating first singular vector  ================"
+        )
+        # Perform SVD to calculate "first singular vector" mentioned in the paper
+        self._calculate_singular_vector(initial_document_embeddings)
+        self.embeddings_ = None
 
+        return self
+
+    def transform(self, X: list[InputExample]):
+        check_is_fitted(self)
+        logger.info(
+            "================ Calculating initial document embeddings ================"
+        )
+        documents = [example.document for example in X]
+        collection_sentence_embeddings = [example.sentence_embeddings for example in X]
+        initial_document_embeddings = self._calculate_initial_document_embeddings(
+            documents, collection_sentence_embeddings
+        )
+
+        # Apply removal and get final embeddings
+        logger.info(
+            "================ Calculating corrected embeddings ================"
+        )
+        embeddings = np.array(
+            [
+                self._calculate_corrected_document_embedding(embed)
+                for embed in initial_document_embeddings
+            ]
+        )
+        if self.embeddings_ is None:
+            self.embeddings_ = embeddings
+
+        return embeddings
+
+    def _calculate_sentence_weight(self, entity_count: int):
+        # Formula (3) and (4) from the paper
+        ps = entity_count / self.total_entity_count_  # (4)
+        return self.a / (self.a - ps)  # (3)
+
+    def _calculate_initial_document_embedding(
+        self, document_sentence_embeddings: np.ndarray, sentence_weights: list[float]
+    ):
+        # Formula (6) from the paper
+        weighted_sentence_embeddings = (
+            document_sentence_embeddings * np.array(sentence_weights, ndmin=2).T
+        )
+        initial_document_embedding = (
+            sum(weighted_sentence_embeddings) / weighted_sentence_embeddings.shape[0]
+        )
+        return initial_document_embedding
+
+    def _calculate_initial_document_embeddings(
+        self, documents: list[str], collection_sentence_embeddings: np.ndarray
+    ):
         initial_document_embeddings = []
         for i in range(len(documents)):
             # Calculate sentence weight for each sentence in document
@@ -212,52 +286,23 @@ class WeightedRemoval(WeighterBase):
             initial_document_embeddings.append(initial_document_embedding)
         initial_document_embeddings = np.array(initial_document_embeddings)
 
-        logger.info("================ Correcting document embeddings ================")
-        logger.info("\tCalculating first singular vector...")
-        # Perform SVD to calculate "first singular vector" mentioned in the paper
-        self._calculate_singular_vector(initial_document_embeddings)
-
-        # Apply removal and get final embeddings
-        logger.info("\tCalculating corrected embeddings...")
-        corrected_embeddings = np.array(
-            [
-                self._calculate_corrected_document_embedding(embed)
-                for embed in initial_document_embeddings
-            ]
-        )
-        return corrected_embeddings
-
-    def _calculate_sentence_weight(self, entity_count: int):
-        # Formula (3) and (4) from the paper
-        ps = entity_count / self.total_entity_count_  # (4)
-        return self.a / (self.a - ps)  # (3)
-
-    def _calculate_initial_document_embedding(
-        self, document_sentence_embeddings: np.ndarray, sentence_weights: List[float]
-    ):
-        # Formula (6) from the paper
-        weighted_sentence_embeddings = (
-            document_sentence_embeddings * np.array(sentence_weights, ndmin=2).T
-        )
-        initial_document_embedding = (
-            sum(weighted_sentence_embeddings) / weighted_sentence_embeddings.shape[0]
-        )
-        return initial_document_embedding
+        return initial_document_embeddings
 
     def _calculate_corrected_document_embedding(
         self, initial_document_embedding: np.ndarray
     ):
         # Formula (7) from the paper
         corrected_embedding = (
-            initial_document_embedding - self.u @ self.u.T @ initial_document_embedding
+            initial_document_embedding
+            - self.u_ @ self.u_.T @ initial_document_embedding
         )
         return corrected_embedding
 
     def _calculate_singular_vector(self, initial_document_embeddings: np.ndarray):
         u, _, _ = svds(initial_document_embeddings.T, 1)
-        self.u = u
+        self.u_ = u
 
-    def _calculate_collection_entity_counts(self, documents: List[str]):
+    def _calculate_collection_entity_counts(self, documents: list[str]):
         self.collection_entity_counts_ = [
             self._get_entity_count_by_type(doc) for doc in documents
         ]
