@@ -34,15 +34,18 @@ class WeighterBase:
         entity_types: list[str] = None,
         entity_detector_kwargs: dict = {},
     ) -> None:
-        """
-        Document embedding model that weights sentences in the document
+        """Document embedding model that weights sentences in the document
         according to number of entities in each sentence.
 
         Args:
-            model_name_or_path (str): NER or any other token classification model
-                from Hugging Face model hub, or local path to model
-            weight_per_entity (float, optional): Weight of each weight token (eg. entity)
-                found in a sentence. Defaults to 1.
+            weighting_model_name (str, optional): NER or any other token classification model
+                from Hugging Face model hub, or local path to model. Defaults to None.
+            entity_detector (Callable, optional): Custom entity detector function. Defaults to None.
+            entity_types (list[str], optional): Entity types to consider while calculating the weights (not implemented). Defaults to None.
+            entity_detector_kwargs (dict, optional): Keyword arguments to pass to entity detector. Defaults to {}.
+
+        Raises:
+            EntityModelNotProvided: Raised when entity_detector and weighting_model_name are both left empty (as None).
         """
         if weighting_model_name is None and entity_detector is None:
             raise EntityModelNotProvided(
@@ -62,6 +65,8 @@ class WeighterBase:
             )
 
     def _load_model(self):
+        """Loads HF model for entity recognition"""
+
         logger.info("================ Loading weighting model ================")
         logger.info(f"\t{self.weighting_model_name}")
         model = AutoModelForTokenClassification.from_pretrained(
@@ -73,6 +78,17 @@ class WeighterBase:
         )
 
     def _get_entity_count_by_type(self, document: list[str]) -> list[int]:
+        """Detects entities for every sentence in the given document.
+        (Using HF model or custom entity detector function)
+        Args:
+            document (list[str]): List of sentences
+
+        Raises:
+            NotImplementedError: Custom entity types are not supported yet.
+
+        Returns:
+            list[int]: Entity counts for each sentence in the document.
+        """
         if not self.entity_types:
             if self.entity_detector is not None:
                 entity_counts = [
@@ -108,16 +124,18 @@ class WeightedAverage(WeighterBase, BaseEstimator, TransformerMixin):
         min_weight: int = 1,
         entity_detector_kwargs: dict = {},
     ) -> None:
-        """Weighted average model that can be used to
-        calculate entity weighted document embeddings.
+        """Weighted average model that can be used to calculate entity
+        weighted document embeddings. See the paper for more details.
 
         Args:
-            weighting_model_name (str): Hugging Face checkpoint of a NER model
-            entity_types (List[str], optional): Entity types to include into weighting.
-                Defaults to None which uses all types.
+            weighting_model_name (str, optional): NER or any other token classification model
+                from Hugging Face model hub, or local path to model. Defaults to None.. Defaults to None.
+            entity_detector (Callable, optional): Custom entity detector function. Defaults to None.
+            entity_types (list[str], optional): Entity types to consider while calculating the weights (not implemented). Defaults to None.
             weight_per_entity (int, optional): Multiplier for each entity in the sentence,
                 see _calculate_sentence_weight method. Defaults to 1.
-            min_weight (int, optional): Minimum weight of a sentence. Defaults to 1.
+            min_weight (int, optional): Minimum weight for each sentence. Defaults to 1 , ensures a weight of a sentence is not 0.
+            entity_detector_kwargs (dict, optional): Keyword arguments to pass to entity detector.. Defaults to {}.
         """
         super().__init__(
             weighting_model_name=weighting_model_name,
@@ -188,14 +206,19 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
         a: int = 10,
         entity_detector_kwargs: dict = {},
     ) -> None:
-        """Weighted removal model # TODO Add explanation
+        """Weighted removal model that can be used to calculate entity
+        weighted document embeddings. See the paper for more details.
 
         Args:
-            weighting_model_name (str): Hugging Face checkpoint of a NER model
-            entity_types (List[str], optional):  Entity types to include into weighting.
-                Defaults to None which uses all types.
+            weighting_model_name (str, optional): NER or any other token classification model
+                from Hugging Face model hub, or local path to model. Defaults to None.
+            entity_detector (Callable, optional): Custom entity detector function. Defaults to None.
+            entity_types (list[str], optional):  Entity types to consider while calculating the weights (not implemented). Defaults to None.
+            weight_per_entity (int, optional): Multiplier for each entity in the sentence,
+                see _calculate_sentence_weight method. Defaults to 1.
             a (int, optional): Parameter proportional to p(s) that is used to ,
                 see _calculate_sentence_weight method. Defaults to 10.
+            entity_detector_kwargs (dict, optional): Keyword arguments to pass to entity detector.. Defaults to {}.
         """
         super().__init__(
             weighting_model_name=weighting_model_name,
