@@ -7,19 +7,11 @@ pip install git+https://github.com/emrecncelik/weighted-bert.git
 ```
 ## Usage
 
+### Using NER Model from HF Transformers
 ```python
-import logging
-import numpy as np
-from sentence_transformers import SentenceTransformer
-from weighted_bert.models import WeightedAverage, WeightedRemoval
-
-logging.basicConfig(level="INFO")
-
-# Select any NER and embedding model from Hugging Face Hub
 weighting_checkpoint = "savasy/bert-base-turkish-ner-cased"
-embedding_checkpoint = "sentence-transformers/distiluse-base-multilingual-cased-v1"
+embedding_checkpoint = "emrecan/bert-base-turkish-cased-mean-nli-stsb-tr"
 
-# Example sentence tokenized documents, normally they should be longer 
 documents = [
 [
     "Tesla'nın otomobilleri insan hayatlarını riske atıyor olabilir.",
@@ -37,11 +29,48 @@ embedding_model = SentenceTransformer(embedding_checkpoint)
 weighter_a = WeightedAverage(weighting_checkpoint)
 weighter_r = WeightedRemoval(weighting_checkpoint)
 
-# Get sentence embeddings of documents
-collection_sentence_embeddings = [embedding_model.encode(doc) for doc in documents]
+# Calculate embeddings
+input_examples = [InputExample(doc, embedding_model.encode(doc)) for doc in documents]
+embeds_a = weighter_a.fit_transform(input_examples)
+embeds_r = weighter_r.fit_transform(input_examples)
+```
 
-# Calculate weighted embeddings
-embeddings_a = np.array([weighter_a.get_document_embedding(doc, sentence_emb)
-                for doc, sentence_emb in zip(documents, collection_sentence_embeddings)])
-embeddings_r = weighter_r.get_document_embeddings(documents, collection_sentence_embeddings)
+
+
+### Using a Custom Entity Detector
+```python
+import re
+from typing import List, Dict, Any
+
+# Example function to detect entities,
+# It does not actually matter if you return a 
+# list of *dictionaries* or not. Weighters only check the length
+# of the sentence_entites list for now.
+def detect(sentence: str) -> List[Dict]:
+    sentence_entites = [] 
+    entity_list = ['tesla', "atatürk", "türkiye"]
+
+    for ent in entity_list:
+        matches = re.finditer(ent, sentence.lower())
+        indexes = [(match.start(), match.end()) for match in matches]
+        if indexes:
+            for start, end in indexes:
+                sentence_entites.append({"text": ent, "start": start, "end": end})
+    
+    return sentence_entites
+
+# Function to apply detect function to list of docs
+def entity_detector(document: List[str]) -> List[List[Dict]]:
+    return [detect(sentence) for sentence in document]
+
+
+# Initialize models
+embedding_model = SentenceTransformer(embedding_checkpoint)
+weighter_a = WeightedAverage(weighting_checkpoint)
+weighter_r = WeightedRemoval(weighting_checkpoint)
+
+# Calculate embeddings
+input_examples = [InputExample(doc, embedding_model.encode(doc)) for doc in documents]
+embeds_a = weighter_a.fit_transform(input_examples)
+embeds_r = weighter_r.fit_transform(input_examples)
 ```
