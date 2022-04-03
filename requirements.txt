@@ -10,7 +10,7 @@ idna==3.3
 iniconfig==1.1.1
 joblib==1.1.0
 mypy-extensions==0.4.3
-nltk==3.6.5
+nltk==3.6.6
 numpy==1.21.4
 packaging==21.3
 pathspec==0.9.0
