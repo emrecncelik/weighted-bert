@@ -60,15 +60,15 @@ class WeighterBase:
         if entity_detector is None:
             self._load_model()
         else:
-            logger.info(
+            logger.debug(
                 "Entity detector function you have provided is being used, not initializing HuggingFace model."
             )
 
     def _load_model(self):
         """Loads HF model for entity recognition"""
 
-        logger.info("================ Loading weighting model ================")
-        logger.info(f"\t{self.weighting_model_name}")
+        logger.debug("================ Loading weighting model ================")
+        logger.debug(f"\t{self.weighting_model_name}")
         model = AutoModelForTokenClassification.from_pretrained(
             self.weighting_model_name
         )
@@ -229,18 +229,18 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
         self.a = a  # TODO Calculate "a" considering max(p(s))?
 
     def fit(self, X: list[InputExample], y=None):
-        logger.info("================ Detecting entities ================")
+        logger.debug("================ Detecting entities ================")
         documents = [example.document for example in X]
 
         self._calculate_collection_entity_counts(documents)
-        logger.info(
+        logger.debug(
             "================ Calculating initial document embeddings ================"
         )
         collection_sentence_embeddings = [example.sentence_embeddings for example in X]
         initial_document_embeddings = self._calculate_initial_document_embeddings(
             documents, collection_sentence_embeddings
         )
-        logger.info(
+        logger.debug(
             " ================ Calculating first singular vector  ================"
         )
         # Perform SVD to calculate "first singular vector" mentioned in the paper
@@ -251,7 +251,7 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
 
     def transform(self, X: list[InputExample]):
         check_is_fitted(self)
-        logger.info(
+        logger.debug(
             "================ Calculating initial document embeddings ================"
         )
         documents = [example.document for example in X]
@@ -261,7 +261,7 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
         )
 
         # Apply removal and get final embeddings
-        logger.info(
+        logger.debug(
             "================ Calculating corrected embeddings ================"
         )
         embeddings = np.array(
