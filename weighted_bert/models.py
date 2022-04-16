@@ -204,6 +204,8 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
         entity_detector: Callable = None,
         entity_types: list[str] = None,
         a: int = 10,
+        weight_per_entity: int = 1,
+        min_weight: float = 0,
         entity_detector_kwargs: dict = {},
     ) -> None:
         """Weighted removal model that can be used to calculate entity
@@ -227,6 +229,8 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
             entity_detector_kwargs=entity_detector_kwargs,
         )
         self.a = a  # TODO Calculate "a" considering max(p(s))?
+        self.weight_per_entity = weight_per_entity
+        self.min_weight = min_weight
 
     def fit(self, X: list[InputExample], y=None):
         logger.debug("================ Detecting entities ================")
@@ -277,8 +281,12 @@ class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
 
     def _calculate_sentence_weight(self, entity_count: int):
         # Formula (3) and (4) from the paper
-        ps = entity_count / self.total_entity_count_  # (4)
-        return self.a / (self.a - ps)  # (3)
+        # Modifications: weight_per_entity, min_weight
+        ps = (entity_count * self.weight_per_entity) / self.total_entity_count_  # (4)
+        if ps == 0:
+            return self.min_weight
+        else:
+            return self.a / (self.a - ps)  # (3)
 
     def _calculate_initial_document_embedding(
         self, document_sentence_embeddings: np.ndarray, sentence_weights: list[float]
