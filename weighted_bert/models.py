@@ -187,7 +187,7 @@ class WeightedAverage(WeighterBase, BaseEstimator, TransformerMixin):
     ) -> float:
         # Formula (2) from the paper
         weights = np.array(weights, ndmin=2).T
-        return np.sum(sentence_embeddings * weights, axis=0) / np.sum(weights)
+        return np.sum(sentence_embeddings * weights, axis=0) / (np.sum(weights) + 1)
 
 
 class WeightedRemoval(WeighterBase, BaseEstimator, TransformerMixin):
